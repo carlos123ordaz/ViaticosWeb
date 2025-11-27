@@ -32,6 +32,10 @@ import {
     CircularProgress,
     InputAdornment,
     Snackbar,
+    ImageList,
+    ImageListItem,
+    ImageListItemBar,
+    AvatarGroup,
 } from '@mui/material';
 import {
     Search as SearchIcon,
@@ -47,11 +51,14 @@ import {
     Schedule as ScheduleIcon,
     Image as ImageIcon,
     ZoomIn as ZoomInIcon,
+    Delete as DeleteIcon,
+    Person as PersonIcon,
+    AccessTime as AccessTimeIcon,
 } from '@mui/icons-material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
-import { es, mt } from 'date-fns/locale';
+import { es } from 'date-fns/locale';
 import moment from 'moment';
 import 'moment/locale/es';
 import axios from 'axios';
@@ -67,6 +74,8 @@ export const IncidenceList = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [page, setPage] = useState(0);
     const [rowsPerPage, setRowsPerPage] = useState(10);
+    const [totalPages, setTotalPages] = useState(0);
+    const [total, setTotal] = useState(0);
 
     // Filtros
     const [filtroFecha, setFiltroFecha] = useState('todas');
@@ -83,12 +92,17 @@ export const IncidenceList = () => {
     const [openEstadoModal, setOpenEstadoModal] = useState(false);
     const [openImageModal, setOpenImageModal] = useState(false);
     const [selectedImage, setSelectedImage] = useState(null);
+    const [selectedImageIndex, setSelectedImageIndex] = useState(0);
 
     // Cambio de estado
     const [nuevoEstado, setNuevoEstado] = useState('');
-    const [fechaEstimada, setFechaEstimada] = useState(null);
+    const [deadline, setDeadline] = useState(null);
+    const [asignado, setAsignado] = useState('');
     const [notasEstado, setNotasEstado] = useState('');
     const [savingEstado, setSavingEstado] = useState(false);
+
+    // Lista de usuarios para asignar (deberías obtenerla de tu API)
+    const [usuarios, setUsuarios] = useState([]);
 
     // Snackbar
     const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
@@ -117,15 +131,42 @@ export const IncidenceList = () => {
 
     useEffect(() => {
         loadIncidencias();
-    }, []);
+        loadUsuarios();
+    }, [page, rowsPerPage, filtroEstado, filtroSeveridad]);
+
+    const loadUsuarios = async () => {
+        try {
+            // Aquí deberías cargar los usuarios de tu API
+            // const response = await axios.get('http://localhost:4000/api/users');
+            // setUsuarios(response.data);
+
+            // Ejemplo temporal:
+            setUsuarios([
+                { _id: '1', nombre: 'Juan', apellido: 'Pérez' },
+                { _id: '2', nombre: 'María', apellido: 'García' },
+                { _id: '3', nombre: 'Carlos', apellido: 'López' },
+            ]);
+        } catch (error) {
+            console.error('Error al cargar usuarios:', error);
+        }
+    };
 
     const loadIncidencias = async () => {
         try {
             setLoading(true);
-            const response = await axios.get(API_URL);
-            const data = response.data.incidencias || response.data;
+            const params = {
+                page: page + 1,
+                limit: rowsPerPage,
+                ...(filtroEstado !== 'todos' && { estado: filtroEstado }),
+                ...(filtroSeveridad !== 'todos' && { gradoSeveridad: filtroSeveridad })
+            };
 
-            setIncidencias(data);
+            const response = await axios.get(API_URL, { params });
+            const data = response.data;
+
+            setIncidencias(data.incidencias || []);
+            setTotalPages(data.totalPages || 0);
+            setTotal(data.total || 0);
         } catch (error) {
             console.error('Error al cargar incidencias:', error);
             setSnackbar({
@@ -138,13 +179,14 @@ export const IncidenceList = () => {
         }
     };
 
+    // Filtrado local adicional (para búsqueda y fecha)
     const incidenciasFiltradas = incidencias.filter(inc => {
         const matchSearch = inc.tipoIncidente?.toLowerCase().includes(searchQuery.toLowerCase()) ||
             inc.ubicacion?.toLowerCase().includes(searchQuery.toLowerCase()) ||
             inc.descripcion?.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchEstado = filtroEstado === 'todos' || inc.estado === filtroEstado;
-        const matchSeveridad = filtroSeveridad === 'todos' || inc.gradoSeveridad === filtroSeveridad;
+
         const matchArea = filtroArea === 'todas' || inc.areaAfectada === filtroArea;
+
         let matchFecha = true;
         const hoy = moment().startOf('day');
         const fechaInc = moment(inc.fecha);
@@ -159,7 +201,7 @@ export const IncidenceList = () => {
             matchFecha = fechaInc.isBetween(moment(fechaInicio), moment(fechaFin), 'day', '[]');
         }
 
-        return matchSearch && matchEstado && matchSeveridad && matchArea && matchFecha;
+        return matchSearch && matchArea && matchFecha;
     });
 
     // Paginación
@@ -204,7 +246,8 @@ export const IncidenceList = () => {
     const handleOpenEstadoModal = (incidencia) => {
         setSelectedIncidencia(incidencia);
         setNuevoEstado(incidencia.estado);
-        setFechaEstimada(incidencia.fechaEstimadaResolucion || null);
+        setDeadline(incidencia.deadline || null);
+        setAsignado(incidencia.asigned?._id || '');
         setNotasEstado('');
         setOpenEstadoModal(true);
     };
@@ -216,18 +259,16 @@ export const IncidenceList = () => {
 
             const updateData = {
                 estado: nuevoEstado,
+                deadline: deadline,
+                asigned: asignado || null,
+                notasEstado: notasEstado,
             };
-            if (nuevoEstado === 'En Revisión' && fechaEstimada) {
-                updateData.fechaEstimadaResolucion = fechaEstimada;
-            }
 
             await axios.put(`${API_URL}/${selectedIncidencia._id}`, updateData);
 
-            setIncidencias(prev => prev.map(inc =>
-                inc._id === selectedIncidencia._id
-                    ? { ...inc, estado: nuevoEstado, fechaEstimadaResolucion: fechaEstimada }
-                    : inc
-            ));
+            // Recargar incidencias
+            await loadIncidencias();
+
             setOpenEstadoModal(false);
             setSnackbar({
                 open: true,
@@ -247,8 +288,9 @@ export const IncidenceList = () => {
     };
 
     // Abrir imagen en modal
-    const handleOpenImage = (imageUrl) => {
-        setSelectedImage(imageUrl);
+    const handleOpenImage = (imageUrls, index = 0) => {
+        setSelectedImage(imageUrls);
+        setSelectedImageIndex(index);
         setOpenImageModal(true);
     };
 
@@ -266,7 +308,7 @@ export const IncidenceList = () => {
     // Contar incidencias por estado
     const getEstadisticas = () => {
         return {
-            total: incidencias.length,
+            total: total,
             pendientes: incidencias.filter(i => i.estado === 'Pendiente').length,
             enRevision: incidencias.filter(i => i.estado === 'En Revisión').length,
             resueltos: incidencias.filter(i => i.estado === 'Resuelto').length,
@@ -276,7 +318,7 @@ export const IncidenceList = () => {
 
     const stats = getEstadisticas();
 
-    if (loading) {
+    if (loading && incidencias.length === 0) {
         return (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
                 <CircularProgress />
@@ -287,8 +329,9 @@ export const IncidenceList = () => {
     return (
         <LocalizationProvider dateAdapter={AdapterDateFns} adapterLocale={es}>
             <Box sx={{ p: 3, backgroundColor: '#f5f5f5', minHeight: '100vh' }}>
+                {/* Estadísticas */}
                 <Grid container spacing={2} sx={{ mb: 3 }}>
-                    <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Grid item xs={12} sm={6} md={2.4}>
                         <Card>
                             <CardContent>
                                 <Typography variant="body2" color="text.secondary">Total</Typography>
@@ -296,7 +339,7 @@ export const IncidenceList = () => {
                             </CardContent>
                         </Card>
                     </Grid>
-                    <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Grid item xs={12} sm={6} md={2.4}>
                         <Card sx={{ borderLeft: '4px solid #F59E0B' }}>
                             <CardContent>
                                 <Typography variant="body2" color="text.secondary">Pendientes</Typography>
@@ -304,7 +347,7 @@ export const IncidenceList = () => {
                             </CardContent>
                         </Card>
                     </Grid>
-                    <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Grid item xs={12} sm={6} md={2.4}>
                         <Card sx={{ borderLeft: '4px solid #3B82F6' }}>
                             <CardContent>
                                 <Typography variant="body2" color="text.secondary">En Revisión</Typography>
@@ -312,7 +355,7 @@ export const IncidenceList = () => {
                             </CardContent>
                         </Card>
                     </Grid>
-                    <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Grid item xs={12} sm={6} md={2.4}>
                         <Card sx={{ borderLeft: '4px solid #10B981' }}>
                             <CardContent>
                                 <Typography variant="body2" color="text.secondary">Resueltos</Typography>
@@ -320,7 +363,7 @@ export const IncidenceList = () => {
                             </CardContent>
                         </Card>
                     </Grid>
-                    <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
+                    <Grid item xs={12} sm={6} md={2.4}>
                         <Card sx={{ borderLeft: '4px solid #EF4444' }}>
                             <CardContent>
                                 <Typography variant="body2" color="text.secondary">Críticos</Typography>
@@ -334,7 +377,7 @@ export const IncidenceList = () => {
                 <Card sx={{ mb: 2 }}>
                     <CardContent>
                         <Grid container spacing={2} alignItems="center">
-                            <Grid size={{ xs: 12, md: 6 }}>
+                            <Grid item xs={12} md={6}>
                                 <TextField
                                     fullWidth
                                     placeholder="Buscar por tipo, ubicación o descripción..."
@@ -349,7 +392,7 @@ export const IncidenceList = () => {
                                     }}
                                 />
                             </Grid>
-                            <Grid size={{ xs: 12, md: 6 }}>
+                            <Grid item xs={12} md={6}>
                                 <Stack direction="row" spacing={1} justifyContent="flex-end">
                                     <Button
                                         variant={showFilters ? "contained" : "outlined"}
@@ -376,7 +419,7 @@ export const IncidenceList = () => {
                         {showFilters && (
                             <Box sx={{ mt: 3, pt: 3, borderTop: '1px solid #e0e0e0' }}>
                                 <Grid container spacing={2}>
-                                    <Grid size={{ xs: 12, md: 3, sm: 6 }}>
+                                    <Grid item xs={12} md={3} sm={6}>
                                         <FormControl fullWidth size="small">
                                             <InputLabel>Período</InputLabel>
                                             <Select
@@ -393,7 +436,7 @@ export const IncidenceList = () => {
 
                                     {filtroFecha === 'rango' && (
                                         <>
-                                            <Grid size={{ xs: 12, md: 3, sm: 6 }}>
+                                            <Grid item xs={12} md={3} sm={6}>
                                                 <DatePicker
                                                     label="Fecha inicio"
                                                     value={fechaInicio}
@@ -401,7 +444,7 @@ export const IncidenceList = () => {
                                                     slotProps={{ textField: { size: 'small', fullWidth: true } }}
                                                 />
                                             </Grid>
-                                            <Grid size={{ xs: 12, md: 3, sm: 6 }}>
+                                            <Grid item xs={12} md={3} sm={6}>
                                                 <DatePicker
                                                     label="Fecha fin"
                                                     value={fechaFin}
@@ -428,7 +471,7 @@ export const IncidenceList = () => {
                                         </FormControl>
                                     </Grid>
 
-                                    <Grid size={{ xs: 12, md: 3, sm: 6 }}>
+                                    <Grid item xs={12} md={3} sm={6}>
                                         <FormControl fullWidth size="small">
                                             <InputLabel>Severidad</InputLabel>
                                             <Select
@@ -444,7 +487,7 @@ export const IncidenceList = () => {
                                         </FormControl>
                                     </Grid>
 
-                                    <Grid size={{ xs: 12, md: 3, sm: 6 }}>
+                                    <Grid item xs={12} md={3} sm={6}>
                                         <FormControl fullWidth size="small">
                                             <InputLabel>Área</InputLabel>
                                             <Select
@@ -464,6 +507,8 @@ export const IncidenceList = () => {
                         )}
                     </CardContent>
                 </Card>
+
+                {/* Tabla de incidencias */}
                 <Card>
                     <TableContainer>
                         <Table>
@@ -474,112 +519,148 @@ export const IncidenceList = () => {
                                     <TableCell><strong>Ubicación</strong></TableCell>
                                     <TableCell><strong>Severidad</strong></TableCell>
                                     <TableCell><strong>Estado</strong></TableCell>
+                                    <TableCell><strong>Asignado</strong></TableCell>
+                                    <TableCell><strong>Deadline</strong></TableCell>
                                     <TableCell><strong>Reportado por</strong></TableCell>
                                     <TableCell align="center"><strong>Acciones</strong></TableCell>
                                 </TableRow>
                             </TableHead>
                             <TableBody>
-                                {incidenciasFiltradas
-                                    .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                                    .map((incidencia) => {
-                                        const sevConfig = getSeveridadConfig(incidencia.gradoSeveridad);
-                                        const estConfig = getEstadoConfig(incidencia.estado);
+                                {incidenciasFiltradas.map((incidencia) => {
+                                    const sevConfig = getSeveridadConfig(incidencia.gradoSeveridad);
+                                    const estConfig = getEstadoConfig(incidencia.estado);
 
-                                        return (
-                                            <TableRow
-                                                key={incidencia._id}
-                                                hover
-                                                sx={{
-                                                    '&:hover': { backgroundColor: '#fafafa' },
-                                                    cursor: 'pointer'
-                                                }}
-                                            >
-                                                <TableCell onClick={() => handleOpenDetail(incidencia)}>
-                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                                        {incidencia.img_url && (
-                                                            <Avatar
-                                                                src={incidencia.img_url}
-                                                                variant="rounded"
-                                                                sx={{ width: 40, height: 40 }}
-                                                            />
-                                                        )}
-                                                        <Box>
-                                                            <Typography variant="body2" fontWeight="600">
-                                                                {incidencia.tipoIncidente}
-                                                            </Typography>
-                                                            <Typography variant="caption" color="text.secondary">
-                                                                {incidencia.areaAfectada}
-                                                            </Typography>
-                                                        </Box>
+                                    return (
+                                        <TableRow
+                                            key={incidencia._id}
+                                            hover
+                                            sx={{
+                                                '&:hover': { backgroundColor: '#fafafa' },
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            <TableCell onClick={() => handleOpenDetail(incidencia)}>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                    {incidencia.imagenes && incidencia.imagenes.length > 0 && (
+                                                        <AvatarGroup max={2}>
+                                                            {incidencia.imagenes.slice(0, 2).map((img, idx) => (
+                                                                <Avatar
+                                                                    key={idx}
+                                                                    src={img}
+                                                                    variant="rounded"
+                                                                    sx={{ width: 40, height: 40 }}
+                                                                />
+                                                            ))}
+                                                        </AvatarGroup>
+                                                    )}
+                                                    <Box>
+                                                        <Typography variant="body2" fontWeight="600">
+                                                            {incidencia.tipoIncidente}
+                                                        </Typography>
+                                                        <Typography variant="caption" color="text.secondary">
+                                                            {incidencia.areaAfectada}
+                                                        </Typography>
                                                     </Box>
-                                                </TableCell>
-                                                <TableCell onClick={() => handleOpenDetail(incidencia)}>
-                                                    <Typography variant="body2">
-                                                        {moment(incidencia.fecha).format('DD/MM/YYYY')}
-                                                    </Typography>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        {moment(incidencia.fecha).format('HH:mm')}
-                                                    </Typography>
-                                                </TableCell>
-                                                <TableCell onClick={() => handleOpenDetail(incidencia)}>
-                                                    <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
-                                                        {incidencia.ubicacion}
-                                                    </Typography>
-                                                </TableCell>
-                                                <TableCell onClick={() => handleOpenDetail(incidencia)}>
+                                                </Box>
+                                            </TableCell>
+                                            <TableCell onClick={() => handleOpenDetail(incidencia)}>
+                                                <Typography variant="body2">
+                                                    {moment(incidencia.fecha).format('DD/MM/YYYY')}
+                                                </Typography>
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {moment(incidencia.fecha).format('HH:mm')}
+                                                </Typography>
+                                            </TableCell>
+                                            <TableCell onClick={() => handleOpenDetail(incidencia)}>
+                                                <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
+                                                    {incidencia.ubicacion}
+                                                </Typography>
+                                            </TableCell>
+                                            <TableCell onClick={() => handleOpenDetail(incidencia)}>
+                                                <Chip
+                                                    label={incidencia.gradoSeveridad}
+                                                    size="small"
+                                                    sx={{
+                                                        backgroundColor: sevConfig.bgColor,
+                                                        color: sevConfig.textColor,
+                                                        fontWeight: 600,
+                                                    }}
+                                                />
+                                            </TableCell>
+                                            <TableCell>
+                                                <Tooltip title="Cambiar estado">
                                                     <Chip
-                                                        label={incidencia.gradoSeveridad}
+                                                        icon={estConfig.icon}
+                                                        label={incidencia.estado}
                                                         size="small"
-                                                        sx={{
-                                                            backgroundColor: sevConfig.bgColor,
-                                                            color: sevConfig.textColor,
-                                                            fontWeight: 600,
-                                                        }}
+                                                        color={estConfig.color}
+                                                        onClick={() => handleOpenEstadoModal(incidencia)}
+                                                        sx={{ cursor: 'pointer', fontWeight: 600 }}
                                                     />
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Tooltip title="Cambiar estado">
-                                                        <Chip
-                                                            icon={estConfig.icon}
-                                                            label={incidencia.estado}
-                                                            size="small"
-                                                            color={estConfig.color}
-                                                            onClick={() => handleOpenEstadoModal(incidencia)}
-                                                            sx={{ cursor: 'pointer', fontWeight: 600 }}
-                                                        />
-                                                    </Tooltip>
-                                                </TableCell>
-                                                <TableCell onClick={() => handleOpenDetail(incidencia)}>
-                                                    <Typography variant="body2">{`${incidencia.user?.nombre} ${incidencia.user?.apellido}` || 'N/A'}</Typography>
-                                                    <Typography variant="caption" color="text.secondary">
-                                                        {incidencia.user?.correo || 'N/A'}
+                                                </Tooltip>
+                                            </TableCell>
+                                            <TableCell>
+                                                {incidencia.asigned ? (
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                        <Avatar sx={{ width: 24, height: 24 }}>
+                                                            {incidencia.asigned.nombre?.charAt(0)}
+                                                        </Avatar>
+                                                        <Typography variant="body2">
+                                                            {incidencia.asigned.nombre} {incidencia.asigned.apellido}
+                                                        </Typography>
+                                                    </Box>
+                                                ) : (
+                                                    <Typography variant="body2" color="text.secondary">
+                                                        Sin asignar
                                                     </Typography>
-                                                </TableCell>
-                                                <TableCell align="center">
-                                                    <Tooltip title="Ver detalles">
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
+                                                {incidencia.deadline ? (
+                                                    <Chip
+                                                        icon={<AccessTimeIcon fontSize="small" />}
+                                                        label={moment(incidencia.deadline).format('DD/MM/YYYY')}
+                                                        size="small"
+                                                        variant="outlined"
+                                                        color={moment(incidencia.deadline).isBefore(moment()) ? 'error' : 'default'}
+                                                    />
+                                                ) : (
+                                                    <Typography variant="body2" color="text.secondary">-</Typography>
+                                                )}
+                                            </TableCell>
+                                            <TableCell onClick={() => handleOpenDetail(incidencia)}>
+                                                <Typography variant="body2">
+                                                    {incidencia.user?.nombre} {incidencia.user?.apellido}
+                                                </Typography>
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {incidencia.user?.correo}
+                                                </Typography>
+                                            </TableCell>
+                                            <TableCell align="center">
+                                                <Tooltip title="Ver detalles">
+                                                    <IconButton
+                                                        size="small"
+                                                        color="primary"
+                                                        onClick={() => handleOpenDetail(incidencia)}
+                                                    >
+                                                        <VisibilityIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                {incidencia.imagenes && incidencia.imagenes.length > 0 && (
+                                                    <Tooltip title={`Ver ${incidencia.imagenes.length} imagen(es)`}>
                                                         <IconButton
                                                             size="small"
-                                                            color="primary"
-                                                            onClick={() => handleOpenDetail(incidencia)}
+                                                            color="info"
+                                                            onClick={() => handleOpenImage(incidencia.imagenes)}
                                                         >
-                                                            <VisibilityIcon fontSize="small" />
+                                                            <ImageIcon fontSize="small" />
                                                         </IconButton>
                                                     </Tooltip>
-                                                    {incidencia.img_url && (
-                                                        <Tooltip title="Ver imagen">
-                                                            <IconButton
-                                                                size="small"
-                                                                color="info"
-                                                                onClick={() => handleOpenImage(incidencia.img_url)}
-                                                            >
-                                                                <ImageIcon fontSize="small" />
-                                                            </IconButton>
-                                                        </Tooltip>
-                                                    )}
-                                                </TableCell>
-                                            </TableRow>
-                                        );
-                                    })}
+                                                )}
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
                             </TableBody>
                         </Table>
                     </TableContainer>
@@ -597,7 +678,7 @@ export const IncidenceList = () => {
 
                     <TablePagination
                         component="div"
-                        count={incidenciasFiltradas.length}
+                        count={total}
                         page={page}
                         onPageChange={handleChangePage}
                         rowsPerPage={rowsPerPage}
@@ -627,32 +708,33 @@ export const IncidenceList = () => {
                                 </Box>
                             </DialogTitle>
                             <DialogContent dividers>
-                                {/* Imagen */}
-                                {selectedIncidencia.img_url && (
-                                    <Box sx={{ mb: 3, position: 'relative' }}>
-                                        <img
-                                            src={selectedIncidencia.img_url}
-                                            alt="Incidencia"
-                                            style={{
-                                                width: '100%',
-                                                maxHeight: 400,
-                                                objectFit: 'cover',
-                                                borderRadius: 8,
-                                            }}
-                                        />
-                                        <IconButton
-                                            sx={{
-                                                position: 'absolute',
-                                                top: 8,
-                                                right: 8,
-                                                backgroundColor: 'rgba(0,0,0,0.6)',
-                                                color: 'white',
-                                                '&:hover': { backgroundColor: 'rgba(0,0,0,0.8)' }
-                                            }}
-                                            onClick={() => handleOpenImage(selectedIncidencia.img_url)}
-                                        >
-                                            <ZoomInIcon />
-                                        </IconButton>
+                                {/* Galería de imágenes */}
+                                {selectedIncidencia.imagenes && selectedIncidencia.imagenes.length > 0 && (
+                                    <Box sx={{ mb: 3 }}>
+                                        <ImageList sx={{ width: '100%', height: 200 }} cols={3} rowHeight={164}>
+                                            {selectedIncidencia.imagenes.map((img, index) => (
+                                                <ImageListItem key={index}>
+                                                    <img
+                                                        src={img}
+                                                        alt={`Imagen ${index + 1}`}
+                                                        loading="lazy"
+                                                        style={{ cursor: 'pointer', objectFit: 'cover', height: '100%' }}
+                                                        onClick={() => handleOpenImage(selectedIncidencia.imagenes, index)}
+                                                    />
+                                                    <ImageListItemBar
+                                                        title={`Imagen ${index + 1}`}
+                                                        actionIcon={
+                                                            <IconButton
+                                                                sx={{ color: 'rgba(255, 255, 255, 0.54)' }}
+                                                                onClick={() => handleOpenImage(selectedIncidencia.imagenes, index)}
+                                                            >
+                                                                <ZoomInIcon />
+                                                            </IconButton>
+                                                        }
+                                                    />
+                                                </ImageListItem>
+                                            ))}
+                                        </ImageList>
                                     </Box>
                                 )}
 
@@ -731,20 +813,52 @@ export const IncidenceList = () => {
 
                                     <Grid item xs={12} sm={6}>
                                         <Box sx={{ display: 'flex', alignItems: 'start', gap: 1 }}>
-                                            <WarningIcon color="action" fontSize="small" />
+                                            <PersonIcon color="action" fontSize="small" />
                                             <Box>
                                                 <Typography variant="caption" color="text.secondary">
                                                     Reportado por
                                                 </Typography>
                                                 <Typography variant="body1" fontWeight="600">
-                                                    {selectedIncidencia.user?.nombre || 'N/A'}
+                                                    {selectedIncidencia.user?.nombre} {selectedIncidencia.user?.apellido}
                                                 </Typography>
                                                 <Typography variant="caption" color="text.secondary">
-                                                    {selectedIncidencia.user?.email || 'N/A'}
+                                                    {selectedIncidencia.user?.correo}
                                                 </Typography>
                                             </Box>
                                         </Box>
                                     </Grid>
+
+                                    {selectedIncidencia.asigned && (
+                                        <Grid item xs={12} sm={6}>
+                                            <Box sx={{ display: 'flex', alignItems: 'start', gap: 1 }}>
+                                                <PersonIcon color="action" fontSize="small" />
+                                                <Box>
+                                                    <Typography variant="caption" color="text.secondary">
+                                                        Asignado a
+                                                    </Typography>
+                                                    <Typography variant="body1" fontWeight="600">
+                                                        {selectedIncidencia.asigned.nombre} {selectedIncidencia.asigned.apellido}
+                                                    </Typography>
+                                                </Box>
+                                            </Box>
+                                        </Grid>
+                                    )}
+
+                                    {selectedIncidencia.deadline && (
+                                        <Grid item xs={12} sm={6}>
+                                            <Box sx={{ display: 'flex', alignItems: 'start', gap: 1 }}>
+                                                <AccessTimeIcon color="action" fontSize="small" />
+                                                <Box>
+                                                    <Typography variant="caption" color="text.secondary">
+                                                        Fecha límite
+                                                    </Typography>
+                                                    <Typography variant="body1" fontWeight="600">
+                                                        {moment(selectedIncidencia.deadline).format('DD/MM/YYYY')}
+                                                    </Typography>
+                                                </Box>
+                                            </Box>
+                                        </Grid>
+                                    )}
                                 </Grid>
 
                                 <Divider sx={{ my: 2 }} />
@@ -778,14 +892,25 @@ export const IncidenceList = () => {
                                     </Box>
                                 )}
 
-                                {/* Fecha estimada de resolución */}
-                                {selectedIncidencia.fechaEstimadaResolucion && (
-                                    <Alert severity="info" sx={{ mt: 2 }}>
-                                        <Typography variant="body2">
-                                            <strong>Fecha estimada de resolución:</strong>{' '}
-                                            {moment(selectedIncidencia.fechaEstimadaResolucion).format('DD/MM/YYYY HH:mm')}
+                                {/* Historial de estados */}
+                                {selectedIncidencia.historialEstados && selectedIncidencia.historialEstados.length > 0 && (
+                                    <Box sx={{ mt: 3 }}>
+                                        <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                                            Historial de Cambios
                                         </Typography>
-                                    </Alert>
+                                        {selectedIncidencia.historialEstados.map((historial, index) => (
+                                            <Box key={index} sx={{ mb: 1, pl: 2, borderLeft: '2px solid #e0e0e0' }}>
+                                                <Typography variant="body2">
+                                                    <strong>{historial.estado}</strong> - {moment(historial.fecha).format('DD/MM/YYYY HH:mm')}
+                                                </Typography>
+                                                {historial.notas && (
+                                                    <Typography variant="caption" color="text.secondary">
+                                                        {historial.notas}
+                                                    </Typography>
+                                                )}
+                                            </Box>
+                                        ))}
+                                    </Box>
                                 )}
                             </DialogContent>
                             <DialogActions>
@@ -798,12 +923,14 @@ export const IncidenceList = () => {
                                         handleOpenEstadoModal(selectedIncidencia);
                                     }}
                                 >
-                                    En revisión
+                                    Gestionar
                                 </Button>
                             </DialogActions>
                         </>
                     )}
                 </Dialog>
+
+                {/* Modal de Cambio de Estado */}
                 <Dialog
                     open={openEstadoModal}
                     onClose={() => !savingEstado && setOpenEstadoModal(false)}
@@ -812,36 +939,67 @@ export const IncidenceList = () => {
                 >
                     <DialogTitle>
                         <Typography variant="h6" fontWeight="bold">
-                            Agregar fecha estimada
+                            Gestionar Incidencia
                         </Typography>
                     </DialogTitle>
                     <DialogContent dividers>
                         {selectedIncidencia && (
                             <Box>
+                                <FormControl fullWidth sx={{ mb: 2 }}>
+                                    <InputLabel>Estado</InputLabel>
+                                    <Select
+                                        value={nuevoEstado}
+                                        label="Estado"
+                                        onChange={(e) => setNuevoEstado(e.target.value)}
+                                        disabled={savingEstado}
+                                    >
+                                        {estados.map(estado => (
+                                            <MenuItem key={estado} value={estado}>{estado}</MenuItem>
+                                        ))}
+                                    </Select>
+                                </FormControl>
+
+                                <FormControl fullWidth sx={{ mb: 2 }}>
+                                    <InputLabel>Asignar a</InputLabel>
+                                    <Select
+                                        value={asignado}
+                                        label="Asignar a"
+                                        onChange={(e) => setAsignado(e.target.value)}
+                                        disabled={savingEstado}
+                                    >
+                                        <MenuItem value="">Sin asignar</MenuItem>
+                                        {usuarios.map(usuario => (
+                                            <MenuItem key={usuario._id} value={usuario._id}>
+                                                {usuario.nombre} {usuario.apellido}
+                                            </MenuItem>
+                                        ))}
+                                    </Select>
+                                </FormControl>
+
                                 <DatePicker
-                                    label="Fecha estimada de resolución"
-                                    value={fechaEstimada}
-                                    onChange={setFechaEstimada}
+                                    label="Fecha límite (Deadline)"
+                                    value={deadline}
+                                    onChange={setDeadline}
                                     disabled={savingEstado}
                                     slotProps={{
                                         textField: {
                                             fullWidth: true,
-                                            helperText: 'Establece una fecha estimada para resolver esta incidencia'
+                                            helperText: 'Establece una fecha límite para resolver esta incidencia'
                                         }
                                     }}
                                 />
-                                <FormControl fullWidth sx={{ mt: 2 }}>
-                                    <InputLabel>Selecciona una opción</InputLabel>
-                                    <Select
-                                        value={''}
-                                        label="Selecciona una opción"
-                                        onChange={(e) => { }}
-                                    >
-                                        <MenuItem value={10}>Luchito</MenuItem>
-                                        <MenuItem value={20}>Victor</MenuItem>
-                                        <MenuItem value={30}>Luchito 2</MenuItem>
-                                    </Select>
-                                </FormControl>
+
+                                <TextField
+                                    fullWidth
+                                    label="Notas (opcional)"
+                                    multiline
+                                    rows={3}
+                                    value={notasEstado}
+                                    onChange={(e) => setNotasEstado(e.target.value)}
+                                    disabled={savingEstado}
+                                    sx={{ mt: 2 }}
+                                    placeholder="Agregar notas sobre este cambio..."
+                                />
                             </Box>
                         )}
                     </DialogContent>
@@ -859,7 +1017,7 @@ export const IncidenceList = () => {
                     </DialogActions>
                 </Dialog>
 
-                {/* Modal de Imagen Ampliada */}
+                {/* Modal de Galería de Imágenes */}
                 <Dialog
                     open={openImageModal}
                     onClose={() => setOpenImageModal(false)}
@@ -868,24 +1026,44 @@ export const IncidenceList = () => {
                 >
                     <DialogTitle>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Typography variant="h6">Imagen de la Incidencia</Typography>
+                            <Typography variant="h6">
+                                Imagen {selectedImageIndex + 1} de {selectedImage?.length || 0}
+                            </Typography>
                             <IconButton onClick={() => setOpenImageModal(false)}>
                                 <CloseIcon />
                             </IconButton>
                         </Box>
                     </DialogTitle>
                     <DialogContent>
-                        {selectedImage && (
-                            <img
-                                src={selectedImage}
-                                alt="Incidencia ampliada"
-                                style={{
-                                    width: '100%',
-                                    height: 'auto',
-                                    maxHeight: '80vh',
-                                    objectFit: 'contain',
-                                }}
-                            />
+                        {selectedImage && selectedImage.length > 0 && (
+                            <Box>
+                                <img
+                                    src={selectedImage[selectedImageIndex]}
+                                    alt={`Imagen ${selectedImageIndex + 1}`}
+                                    style={{
+                                        width: '100%',
+                                        height: 'auto',
+                                        maxHeight: '70vh',
+                                        objectFit: 'contain',
+                                    }}
+                                />
+                                {selectedImage.length > 1 && (
+                                    <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2, gap: 1 }}>
+                                        <Button
+                                            onClick={() => setSelectedImageIndex(Math.max(0, selectedImageIndex - 1))}
+                                            disabled={selectedImageIndex === 0}
+                                        >
+                                            Anterior
+                                        </Button>
+                                        <Button
+                                            onClick={() => setSelectedImageIndex(Math.min(selectedImage.length - 1, selectedImageIndex + 1))}
+                                            disabled={selectedImageIndex === selectedImage.length - 1}
+                                        >
+                                            Siguiente
+                                        </Button>
+                                    </Box>
+                                )}
+                            </Box>
                         )}
                     </DialogContent>
                 </Dialog>
